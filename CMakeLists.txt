@@ -41,11 +41,11 @@ if (FindLAPACK_FOUND)
 endif()
 
 # Armadillo
-set(ARMADILLO_INCLUDE_DIR "../Armadillo/include")
+set(ARMADILLO_INCLUDE_DIR "D:/Dev/Armadillo/include")
 if(CMAKE_BUILD_TYPE MATCHES "Debug")
-    set(ARMADILLO_LIBRARY "../Armadillo/lib/armadillod.lib")
+    set(ARMADILLO_LIBRARY "D:/Dev/Armadillo/lib/armadillod.lib")
 else()
-	set(ARMADILLO_LIBRARY "../Armadillo/lib/armadillo.lib")
+	set(ARMADILLO_LIBRARY "D:/Dev/Armadillo/lib/armadillo.lib")
 endif()
 include( FindArmadillo ) 
 
