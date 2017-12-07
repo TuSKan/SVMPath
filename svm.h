@@ -20,11 +20,53 @@ public:
 		MTri.fill(numeric_limits<double>::quiet_NaN());
 	};
 	~KMatrix() { };
+	// Virtual
+	virtual double KFun(const uword i, const uword j) const = 0;
 	// Operator
-	virtual double operator() (const uword i, const uword j) {};
+	double operator() (const uword i, const uword j) {
+		uword IJ;
+		if (i < j) IJ = j + i * dim - accu(sequence(0, i));
+		else IJ = i + j * dim - accu(sequence(0, j));
+		if (isnan(MTri[IJ])) MTri[IJ] = KFun(i, j);
+		return MTri[IJ];
+	}
+
+	const vec operator* (const vec& v) {
+		arma_assert_mul_size(dim, dim, v.n_rows, v.n_cols, string("multiply KMatrix").c_str());
+		if (count != size) fill(0, dim);
+		vec res(dim);
+#pragma omp parallel for
+		for (uword j = 0; j < dim; ++j) {
+			res(j) = dot(v, col(j));
+		}
+		return res;
+	}
 	// Accessors
-	const bool isFilled() const { return count == size; }
-	const vec& getMtri() const { return MTri; }
+	void fill(const uword begin, const uword end) {
+#pragma omp parallel for
+		for (uword j = begin; j < end; ++j) {
+			for (uword i = j; i < dim; ++i) {
+				const uword IJ = i + j * dim - accu(sequence(0, j));
+				if (isnan(MTri[IJ])) MTri[IJ] = KFun(i, j);
+			}
+		}
+	}
+	const vec col(const uword j) const {
+		uvec ID = zeros<uvec>(dim);
+		for (uword i = 0; i < j; ++i) ID(i) = j + i * dim - accu(sequence(0, i));
+		ID(sequence(j, dim - 1)) = sequence(j + j * dim - accu(sequence(0, j)), dim - 1 + j * dim - accu(sequence(0, j)));
+		return MTri.elem(ID); 
+	}
+	const vec row(const uword i) const { return col(i); }
+	const mat copy() {
+		if (count != size) fill(0,dim);
+		mat R(dim, dim);
+#pragma omp parallel for
+		for (uword j = 0; j < dim; ++j) {
+			R.col(j) = col(j);
+		}
+		return R;
+	}
 	// Members
 protected:
 	string name;
@@ -37,49 +79,12 @@ public:
 	const uword dim;
 }; // KFun
 
-const vec dot(const vec& v, KMatrix& K) {
-	arma_assert_same_size(v.n_rows, v.n_cols, K.dim, 1, string("dot KMatrix").c_str());
-	vec res(K.dim);
-	if (K.isFilled()) {
-		const vec& MTri = K.getMtri();
-//#pragma omp parallel for
-		for (uword j = 0; j < K.dim; ++j) {
-			uvec ID = zeros<uvec>(K.dim);
-			for (uword i = 0; i < j; ++i) ID(i) = j + i * K.dim - accu(sequence(0, i));
-			ID(sequence(j, K.dim - 1)) = sequence(j + j * K.dim - accu(sequence(0, j)), K.dim - 1 + j * K.dim - accu(sequence(0, j)));
-			res(j) = dot(v, MTri.elem(ID));
-		}
-	}
-	else {		
-//#pragma omp parallel for
-		for (uword j = 0; j < K.dim; ++j) {
-			double tmp(0);
-			for (uword i = 0; i < K.dim; ++i) {
-				tmp += v[i] * K(i, j);
-			}
-			res(j) = tmp;
-		}
-	}
-	return res;
-}
-
-const vec dot(KMatrix& K, const vec& v) {  return dot(v, K); }
-
    // Linear Kernel
 class KLinear : public KMatrix {
 public:
 	KLinear(const mat * X) : KMatrix(X, "Linear") {}
-	double operator() (const uword i, const uword j) {
-		uword IJ;
-		if (i < j) IJ = j + i * dim - accu(sequence(0, i));
-		else IJ = i + j * dim - accu(sequence(0, j));
-		double res = MTri[IJ];
-		if (isnan(res)) {
-			res = dot(X->col(i), X->col(j));
-			MTri[IJ] = res;
-			++count;
-		}
-		return res;
+	double KFun(const uword i, const uword j) const {
+		return dot(X->col(i), X->col(j));
 	}
 }; // KLinear
 
@@ -87,17 +92,8 @@ public:
 class KRBF : public KMatrix {
 public:
 	KRBF(const mat * X, double gamma) : KMatrix(X, "RBF", gamma) {}
-	double operator() (const uword i, const uword j) {
-		uword IJ;
-		if (i < j) IJ = j + i * dim - accu(sequence(0,i));
-		else IJ = i + j * dim - accu(sequence(0, j));
-		double res = MTri[IJ];
-		if (isnan(res)) {
-			res = exp(-param*(dot(X->col(i), X->col(i)) + dot(X->col(j), X->col(j)) - 2 * dot(X->col(i), X->col(j))));
-			MTri[IJ] = res;
-			++count;
-		}
-		return res;
+	double KFun(const uword i, const uword j) const {
+		return exp(-param * (dot(X->col(i), X->col(i)) + dot(X->col(j), X->col(j)) - 2 * dot(X->col(i), X->col(j))));
 	}
 }; // KRBF
 
@@ -108,17 +104,8 @@ private:
 	double coef0;
 public:
 	KPolynomial(const double gamma, const uword degree, const double coef0 = NULL) : KMatrix(X, "Polynomial", gamma), degree(degree), coef0(coef0) {}
-	double operator() (const uword i, const uword j) {
-		uword IJ;
-		if (i < j) IJ = j + i * dim - accu(sequence(0, i));
-		else IJ = i + j * dim - accu(sequence(0, i));
-		double res = MTri[IJ];
-		if (isnan(res)) {
-			res = pow(param * dot(X->col(i), X->col(j)) + coef0, degree);
-			MTri[IJ] = res;
-			++count;
-		}
-		return res;
+	double KFun (const uword i, const uword j) const {
+		return pow(param * dot(X->col(i), X->col(j)) + coef0, degree);
 	}
 };
 
@@ -129,17 +116,8 @@ private:
 public:
 	KSigmoid(double gamma, double coef0 = NULL) : coef0(coef0) { param = gamma; name = "Sigmoid"; }
 	double operator() (const uword i, const uword j) {
-		uword IJ;
-		if (i < j) IJ = j + i * dim - accu(sequence(0, i));
-		else IJ = i + j * dim - accu(sequence(0, i));
-		double res = MTri[IJ];
-		if (isnan(res)) {
-			res = tanh(param * dot(X->col(i), X->col(j)) + coef0);
-			MTri[IJ] = res;
-			++count;
-		}
-		return res;
-	}
+		return tanh(param * dot(X->col(i), X->col(j)) + coef0);
+	}	
 };
 
 class Kernel {
